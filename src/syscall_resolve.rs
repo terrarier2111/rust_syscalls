@@ -16,7 +16,7 @@ unsafe fn __readgsqword(offset: u32) -> u64 {
         "mov {}, gs:[{:e}]",
         lateout(reg) out,
         in(reg) offset,
-        options(nostack, pure, readonly),
+        options(nostack, nomem),
     );
     out
 }
@@ -28,7 +28,7 @@ unsafe fn __readfsdword(offset: u32) -> u32 {
         "mov {:e}, fs:[{:e}]",
         lateout(reg) out,
         in(reg) offset,
-        options(nostack, pure, readonly),
+        options(nostack, nomem),
     );
     out
 }
