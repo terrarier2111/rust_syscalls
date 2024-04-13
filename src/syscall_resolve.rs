@@ -3,10 +3,14 @@ use std::ptr::{addr_of, null};
 
 use core::slice;
 
+use crate::definitions::{
+    ImageDataDirectory, ImageDosHeader, ImageExportDirectory, ImageNtHeaders, LdrDataTableEntry,
+    ListEntry, PEB,
+};
 use crate::obf::dbj2_hash;
 
 #[cfg(target_arch = "x86_64")]
-pub unsafe fn __readgsqword(offset: u32) -> u64 {
+unsafe fn __readgsqword(offset: u32) -> u64 {
     let out: u64;
     asm!(
         "mov {}, gs:[{:e}]",
@@ -18,7 +22,7 @@ pub unsafe fn __readgsqword(offset: u32) -> u64 {
 }
 
 #[cfg(target_arch = "x86")]
-pub unsafe fn __readfsdword(offset: u32) -> u32 {
+unsafe fn __readfsdword(offset: u32) -> u32 {
     let out: u32;
     asm!(
         "mov {:e}, fs:[{:e}]",
@@ -37,7 +41,7 @@ pub unsafe fn is_wow64() -> bool {
 
 #[inline(always)]
 #[cfg(target_pointer_width = "64")]
-pub fn get_peb() -> *const PEB {
+fn get_peb() -> *const PEB {
     let peb;
     unsafe {
         asm!("mov {}, gs:0x60", out(reg) peb, options(nomem, nostack));
@@ -47,7 +51,7 @@ pub fn get_peb() -> *const PEB {
 
 #[inline(always)]
 #[cfg(target_pointer_width = "32")]
-pub fn get_peb() -> *const PEB {
+fn get_peb() -> *const PEB {
     let peb;
     unsafe {
         asm!("mov {}, fs:0x30", out(reg) peb, options(nomem, nostack));
@@ -55,202 +59,7 @@ pub fn get_peb() -> *const PEB {
     peb
 }
 
-#[repr(C)]
-struct UnicodeString {
-    len: u16,
-    max_len: u16,
-    buffer: *const (),
-}
-
-#[repr(C)]
-struct PEB {
-    _reserved_0: [u8; 2],
-    being_debugged: u8,
-    _reserved_2: [u8; 1],
-    _reserved_3: [*const (); 2],
-    ldr: *const Ldr,
-    // ...some other fields
-}
-
-#[repr(C)]
-struct Ldr {
-    _reserved_0: [u8; 8],
-    _reserved_1: [*const (); 3],
-    in_memory_order_module_list: ListEntry,
-}
-
-#[repr(C)]
-struct ListEntry {
-    f_link: *const ListEntry,
-    b_link: *const ListEntry,
-}
-
-#[repr(C)]
-struct LdrDataTableEntry {
-    _reserved_0: [*const (); 2],
-    in_memory_order_links: ListEntry,
-    _reserved_1: [*const (); 2],
-    dll_base: *const (),
-    entry_point: *const (),
-    _reserved_2: [*const (); 1],
-    full_dll_name: UnicodeString,
-    _reserved_3: [u8; 8],
-    _reserved_4: [*const (); 3],
-    checksum: Checksum,
-    time_stamp: u32,
-}
-
-union Checksum {
-    checksum: u32,
-    _reserved: *const (),
-}
-
-#[repr(C)]
-struct ImageDosHeader {
-    magic: u16,
-    cblp: u16,
-    cp: u16,
-    crlc: u16,
-    cparhdr: u16,
-    minalloc: u16,
-    maxalloc: u16,
-    ss: u16,
-    sp: u16,
-    csum: u16,
-    ip: u16,
-    cs: u16,
-    lfarlc: u16,
-    ovno: u16,
-    _reserved_0: [u16; 4],
-    oemid: u16,
-    oeminfo: u16,
-    _reserved_1: [u16; 10],
-    lfanew: u32,
-}
-
-#[repr(C)]
-struct ImageNtHeaders64 {
-    signature: u32,
-    file_header: ImageFileHeader,
-    optional_header: ImageOptionalHeader64,
-}
-
-#[repr(C)]
-struct ImageNtHeaders32 {
-    signature: u32,
-    file_header: ImageFileHeader,
-    optional_header: ImageOptionalHeader32,
-}
-
-const IMAGE_NUMBEROF_DIRECTORY_ENTRIES: usize = 16;
-
-#[repr(C)]
-struct ImageOptionalHeader32 {
-    magic: u16,
-    major_linker_version: u8,
-    minor_linker_version: u8,
-    size_of_code: u32,
-    size_of_initialized_data: u32,
-    size_of_uninitialized_data: u32,
-    address_of_entry_point: u32,
-    base_of_code: u32,
-    base_of_data: u32,
-    image_base: u32,
-    section_alignment: u32,
-    file_alignment: u32,
-    major_operating_system_version: u16,
-    minor_operating_system_version: u16,
-    major_image_version: u16,
-    minor_image_version: u16,
-    major_subsystem_version: u16,
-    minor_subsystem_version: u16,
-    win32_version_value: u32,
-    size_of_image: u32,
-    size_of_headers: u32,
-    check_sum: u32,
-    subsystem: u16,
-    dll_characteristics: u16,
-    size_of_stack_reserve: u32,
-    size_of_stack_commit: u32,
-    size_of_heap_reserve: u32,
-    size_of_heap_commit: u32,
-    loader_flags: u32,
-    numver_if_rva_and_sizes: u32,
-    data_directory: [ImageDataDirectory; IMAGE_NUMBEROF_DIRECTORY_ENTRIES],
-}
-
-#[repr(C)]
-struct ImageOptionalHeader64 {
-    magic: u16,
-    major_linker_version: u8,
-    minor_linker_version: u8,
-    size_of_code: u32,
-    size_of_initialized_data: u32,
-    size_of_uninitialized_data: u32,
-    address_of_entry_point: u32,
-    base_of_code: u32,
-    image_base: u64,
-    section_alignment: u32,
-    file_alignment: u32,
-    major_operating_system_version: u16,
-    minor_operating_system_version: u16,
-    major_image_version: u16,
-    minor_image_version: u16,
-    major_subsystem_version: u16,
-    minor_subsystem_version: u16,
-    win32_version_value: u32,
-    size_of_image: u32,
-    size_of_headers: u32,
-    check_sum: u32,
-    subsystem: u16,
-    dll_characteristics: u16,
-    size_of_stack_reserve: u64,
-    size_of_stack_commit: u64,
-    size_of_heap_reserve: u64,
-    size_of_heap_commit: u64,
-    loader_flags: u32,
-    numver_if_rva_and_sizes: u32,
-    data_directory: [ImageDataDirectory; IMAGE_NUMBEROF_DIRECTORY_ENTRIES],
-}
-
-#[repr(C)]
-struct ImageDataDirectory {
-    virtual_address: u32,
-    size: u32,
-}
-
-#[cfg(target_pointer_width = "64")]
-type ImageNtHeaders = ImageNtHeaders64;
-#[cfg(target_pointer_width = "32")]
-type ImageNtHeaders = ImageNtHeaders32;
-
-#[repr(C)]
-struct ImageFileHeader {
-    machine: u16,
-    number_of_sections: u16,
-    time_stamp: u32,
-    ptr_to_symbol_table: u32,
-    number_of_symbols: u32,
-    size_of_optional_header: u16,
-    characteristics: u16,
-}
-
-#[repr(C)]
-struct ImageExportDirectory {
-    characteristics: u32,
-    time_stamp: u32,
-    major_version: u16,
-    minor_version: u16,
-    name: u32,
-    base: u32,
-    number_of_functions: u32,
-    number_of_names: u32,
-    address_of_functions: u32,
-    address_of_names: u32,
-    address_of_names_ordinals: u32,
-}
-
-pub fn get_cstr_len(pointer: *const char) -> usize {
+fn get_cstr_len(pointer: *const char) -> usize {
     let mut tmp = pointer as u64;
     unsafe {
         while *(tmp as *const u8) != 0 {

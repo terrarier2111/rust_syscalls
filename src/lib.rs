@@ -6,6 +6,7 @@ compile_error!(
     "\t [!] RUST_SYSCALLS ERROR: feature \"direct\" or feature \"indirect\" must be enabled"
 );
 
+mod definitions;
 pub mod obf;
 pub mod syscall;
 pub mod syscall_resolve;
