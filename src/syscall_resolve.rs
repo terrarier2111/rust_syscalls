@@ -1,19 +1,9 @@
-use std::ptr::addr_of;
 use std::arch::asm;
+use std::ptr::{addr_of, null};
 
 use core::slice;
 
-use ntapi::ntldr::PLDR_DATA_TABLE_ENTRY;
-use ntapi::FIELD_OFFSET;
-use ntapi::ntpebteb::{PPEB, TEB};
-use ntapi::ntpsapi::PPEB_LDR_DATA;
-
-use winapi::shared::minwindef::{PWORD, PUSHORT};
-use winapi::shared::ntdef::{NULL, PVOID, ULONG, PUCHAR, PLIST_ENTRY};
-use winapi::um::winnt::{PIMAGE_DOS_HEADER, PIMAGE_DATA_DIRECTORY, PIMAGE_NT_HEADERS, PIMAGE_EXPORT_DIRECTORY};
-
 use crate::obf::dbj2_hash;
-
 
 #[cfg(target_arch = "x86_64")]
 pub unsafe fn __readgsqword(offset: u32) -> u64 {
@@ -42,182 +32,350 @@ pub unsafe fn __readfsdword(offset: u32) -> u32 {
 #[cfg(target_arch = "x86")]
 pub unsafe fn is_wow64() -> bool {
     let addr = __readfsdword(0xC0);
-    if addr != 0 {
-        return true
-    }
-    false
+    addr != 0
 }
 
-pub unsafe fn nt_current_teb() -> *mut TEB {
-    use winapi::um::winnt::NT_TIB;
-    let teb_offset = FIELD_OFFSET!(NT_TIB, _Self) as u32;
-    #[cfg(target_arch = "x86_64")] {
-        __readgsqword(teb_offset) as *mut TEB
-    }
-    #[cfg(target_arch = "x86")] {
-        __readfsdword(teb_offset) as *mut TEB
-    }
-}
-
-pub unsafe fn nt_current_peb() -> PPEB {
-    (*nt_current_teb()).ProcessEnvironmentBlock
-}
-
-
-pub fn get_cstr_len(pointer: *const char) -> usize{
-    let mut tmp: u64 = pointer as u64;
+#[inline(always)]
+#[cfg(target_pointer_width = "64")]
+pub fn get_peb() -> *const PEB {
+    let peb;
     unsafe {
-        while *(tmp as *const u8) != 0{
+        asm!("mov {}, gs:0x60", out(reg) peb, options(nomem, nostack));
+    }
+    peb
+}
+
+#[inline(always)]
+#[cfg(target_pointer_width = "32")]
+pub fn get_peb() -> *const PEB {
+    let peb;
+    unsafe {
+        asm!("mov {}, fs:0x30", out(reg) peb, options(nomem, nostack));
+    }
+    peb
+}
+
+#[repr(C)]
+struct UnicodeString {
+    len: u16,
+    max_len: u16,
+    buffer: *const (),
+}
+
+#[repr(C)]
+struct PEB {
+    _reserved_0: [u8; 2],
+    being_debugged: u8,
+    _reserved_2: [u8; 1],
+    _reserved_3: [*const (); 2],
+    ldr: *const Ldr,
+    // ...some other fields
+}
+
+#[repr(C)]
+struct Ldr {
+    _reserved_0: [u8; 8],
+    _reserved_1: [*const (); 3],
+    in_memory_order_module_list: ListEntry,
+}
+
+#[repr(C)]
+struct ListEntry {
+    f_link: *const ListEntry,
+    b_link: *const ListEntry,
+}
+
+#[repr(C)]
+struct LdrDataTableEntry {
+    _reserved_0: [*const (); 2],
+    in_memory_order_links: ListEntry,
+    _reserved_1: [*const (); 2],
+    dll_base: *const (),
+    entry_point: *const (),
+    _reserved_2: [*const (); 1],
+    full_dll_name: UnicodeString,
+    _reserved_3: [u8; 8],
+    _reserved_4: [*const (); 3],
+    checksum: Checksum,
+    time_stamp: u32,
+}
+
+union Checksum {
+    checksum: u32,
+    _reserved: *const (),
+}
+
+#[repr(C)]
+struct ImageDosHeader {
+    magic: u16,
+    cblp: u16,
+    cp: u16,
+    crlc: u16,
+    cparhdr: u16,
+    minalloc: u16,
+    maxalloc: u16,
+    ss: u16,
+    sp: u16,
+    csum: u16,
+    ip: u16,
+    cs: u16,
+    lfarlc: u16,
+    ovno: u16,
+    _reserved_0: [u16; 4],
+    oemid: u16,
+    oeminfo: u16,
+    _reserved_1: [u16; 10],
+    lfanew: u32,
+}
+
+#[repr(C)]
+struct ImageNtHeaders64 {
+    signature: u32,
+    file_header: ImageFileHeader,
+    optional_header: ImageOptionalHeader64,
+}
+
+#[repr(C)]
+struct ImageNtHeaders32 {
+    signature: u32,
+    file_header: ImageFileHeader,
+    optional_header: ImageOptionalHeader32,
+}
+
+const IMAGE_NUMBEROF_DIRECTORY_ENTRIES: usize = 16;
+
+#[repr(C)]
+struct ImageOptionalHeader32 {
+    magic: u16,
+    major_linker_version: u8,
+    minor_linker_version: u8,
+    size_of_code: u32,
+    size_of_initialized_data: u32,
+    size_of_uninitialized_data: u32,
+    address_of_entry_point: u32,
+    base_of_code: u32,
+    base_of_data: u32,
+    image_base: u32,
+    section_alignment: u32,
+    file_alignment: u32,
+    major_operating_system_version: u16,
+    minor_operating_system_version: u16,
+    major_image_version: u16,
+    minor_image_version: u16,
+    major_subsystem_version: u16,
+    minor_subsystem_version: u16,
+    win32_version_value: u32,
+    size_of_image: u32,
+    size_of_headers: u32,
+    check_sum: u32,
+    subsystem: u16,
+    dll_characteristics: u16,
+    size_of_stack_reserve: u32,
+    size_of_stack_commit: u32,
+    size_of_heap_reserve: u32,
+    size_of_heap_commit: u32,
+    loader_flags: u32,
+    numver_if_rva_and_sizes: u32,
+    data_directory: [ImageDataDirectory; IMAGE_NUMBEROF_DIRECTORY_ENTRIES],
+}
+
+#[repr(C)]
+struct ImageOptionalHeader64 {
+    magic: u16,
+    major_linker_version: u8,
+    minor_linker_version: u8,
+    size_of_code: u32,
+    size_of_initialized_data: u32,
+    size_of_uninitialized_data: u32,
+    address_of_entry_point: u32,
+    base_of_code: u32,
+    image_base: u64,
+    section_alignment: u32,
+    file_alignment: u32,
+    major_operating_system_version: u16,
+    minor_operating_system_version: u16,
+    major_image_version: u16,
+    minor_image_version: u16,
+    major_subsystem_version: u16,
+    minor_subsystem_version: u16,
+    win32_version_value: u32,
+    size_of_image: u32,
+    size_of_headers: u32,
+    check_sum: u32,
+    subsystem: u16,
+    dll_characteristics: u16,
+    size_of_stack_reserve: u64,
+    size_of_stack_commit: u64,
+    size_of_heap_reserve: u64,
+    size_of_heap_commit: u64,
+    loader_flags: u32,
+    numver_if_rva_and_sizes: u32,
+    data_directory: [ImageDataDirectory; IMAGE_NUMBEROF_DIRECTORY_ENTRIES],
+}
+
+#[repr(C)]
+struct ImageDataDirectory {
+    virtual_address: u32,
+    size: u32,
+}
+
+#[cfg(target_pointer_width = "64")]
+type ImageNtHeaders = ImageNtHeaders64;
+#[cfg(target_pointer_width = "32")]
+type ImageNtHeaders = ImageNtHeaders32;
+
+#[repr(C)]
+struct ImageFileHeader {
+    machine: u16,
+    number_of_sections: u16,
+    time_stamp: u32,
+    ptr_to_symbol_table: u32,
+    number_of_symbols: u32,
+    size_of_optional_header: u16,
+    characteristics: u16,
+}
+
+#[repr(C)]
+struct ImageExportDirectory {
+    characteristics: u32,
+    time_stamp: u32,
+    major_version: u16,
+    minor_version: u16,
+    name: u32,
+    base: u32,
+    number_of_functions: u32,
+    number_of_names: u32,
+    address_of_functions: u32,
+    address_of_names: u32,
+    address_of_names_ordinals: u32,
+}
+
+pub fn get_cstr_len(pointer: *const char) -> usize {
+    let mut tmp = pointer as u64;
+    unsafe {
+        while *(tmp as *const u8) != 0 {
             tmp += 1;
         }
     }
     (tmp - pointer as u64) as _
 }
 
-fn get_module_addr( hash: ULONG ) -> PVOID
-{
-	let     ldr      : PPEB_LDR_DATA;
-	let     header   : PLIST_ENTRY;
-	let mut dt_entry : PLDR_DATA_TABLE_ENTRY;
-	let mut entry    : PLIST_ENTRY;
-    let mut mod_hash : ULONG;
-    let mut mod_name : &[u8];
-    let mut mod_len  : usize;
+fn get_module_addr(hash: u32) -> *const () {
+    let mut dt_entry;
+    let mut mod_hash;
+    let mut mod_name;
+    let mut mod_len;
 
     unsafe {
-        ldr = (*nt_current_peb()).Ldr;
-        header = addr_of!((*ldr).InLoadOrderModuleList) as PLIST_ENTRY;
-        entry = (*header).Flink;
-    
+        let ldr = (*get_peb()).ldr;
+        let header = addr_of!((*ldr).in_memory_order_module_list) as *const ListEntry;
+        let mut entry = (*header).f_link;
+
         while header as u64 != entry as u64 {
-            dt_entry = entry as PLDR_DATA_TABLE_ENTRY;
-            mod_len  = ((*dt_entry).BaseDllName.Length) as usize;
-            mod_name = slice::from_raw_parts((*dt_entry).BaseDllName.Buffer as *const u8, 
-                                                mod_len);
-            mod_hash = dbj2_hash(mod_name) as ULONG;
+            dt_entry = entry.cast::<LdrDataTableEntry>();
+            mod_len = ((*dt_entry).full_dll_name.len) as usize;
+            mod_name =
+                slice::from_raw_parts((*dt_entry).full_dll_name.buffer as *const u8, mod_len);
+            mod_hash = dbj2_hash(mod_name);
 
             if mod_hash == hash {
-                return (*dt_entry).DllBase
+                return (*dt_entry).dll_base;
             }
 
-            entry = (*entry).Flink;
+            entry = (*entry).f_link;
         }
     }
-    NULL
+    null()
 }
 
-fn get_function_addr(mdoule_addr: PVOID, hash: u32) -> PVOID{
-    let dos_header   : PIMAGE_DOS_HEADER;
-	let nt_header    : PIMAGE_NT_HEADERS;
-    let data_dir     : PIMAGE_DATA_DIRECTORY;
-    let exp_dir      : PIMAGE_EXPORT_DIRECTORY;
-    let addr_funcs   : PWORD;
-    let addr_names   : PWORD;
-    let addr_ords    : PUSHORT;
-    let mut str_addr : PUCHAR;
-    let mut str_len  : usize;
-    let addr_list    : &[u32];
-    let name_list    : &[u32];
-    let ord_list     : &[u16];
-
-	dos_header = mdoule_addr as PIMAGE_DOS_HEADER;
+fn get_function_addr(mdoule_addr: *const (), hash: u32) -> *const () {
+    let dos_header = mdoule_addr as *const ImageDosHeader;
 
     unsafe {
-        nt_header = (dos_header as u64 + (*dos_header).e_lfanew as u64)   as PIMAGE_NT_HEADERS;
-        data_dir = addr_of!((*nt_header).OptionalHeader.DataDirectory[0]) as PIMAGE_DATA_DIRECTORY;
-        
-        if (*data_dir).VirtualAddress != 0 {
-            exp_dir    = (dos_header as u64 + (*data_dir).VirtualAddress as u64)       as PIMAGE_EXPORT_DIRECTORY;
-            addr_funcs = (dos_header as u64 + (*exp_dir).AddressOfFunctions as u64 )   as PWORD;
-            addr_names = (dos_header as u64 + (*exp_dir).AddressOfNames as u64)        as PWORD;
-            addr_ords  = (dos_header as u64 + (*exp_dir).AddressOfNameOrdinals as u64) as PUSHORT;
+        let nt_header =
+            (dos_header as usize + (*dos_header).lfanew as usize) as *const ImageNtHeaders;
+        let data_dir =
+            addr_of!((*nt_header).optional_header.data_directory[0]) as *const ImageDataDirectory;
 
-            name_list = slice::from_raw_parts(addr_names as *const u32, (*exp_dir).NumberOfNames as usize);
-            ord_list  = slice::from_raw_parts(addr_ords as *const u16,  (*exp_dir).NumberOfNames as usize);
-            addr_list = slice::from_raw_parts(addr_funcs as *const u32, (*exp_dir).NumberOfNames as usize);
+        if (*data_dir).virtual_address != 0 {
+            let exp_dir = (dos_header as usize + (*data_dir).virtual_address as usize)
+                as *const ImageExportDirectory;
+            let addr_funcs =
+                (dos_header as usize + (*exp_dir).address_of_functions as usize) as *const ();
+            let addr_names =
+                (dos_header as usize + (*exp_dir).address_of_names as usize) as *const ();
+            let addr_ords =
+                (dos_header as usize + (*exp_dir).address_of_names_ordinals as usize) as *const ();
 
-            for iter in 0..(*exp_dir).NumberOfNames as usize {
-                str_addr = (dos_header as u64 + name_list[iter] as u64) as PUCHAR;
+            let name_list = slice::from_raw_parts(
+                addr_names as *const u32,
+                (*exp_dir).number_of_names as usize,
+            );
+            let ord_list =
+                slice::from_raw_parts(addr_ords as *const u16, (*exp_dir).number_of_names as usize);
+            let addr_list = slice::from_raw_parts(
+                addr_funcs as *const u32,
+                (*exp_dir).number_of_functions as usize,
+            );
+
+            let mut str_addr;
+            let mut str_len;
+            for iter in 0..(*exp_dir).number_of_names as usize {
+                str_addr = dos_header as usize + name_list[iter] as usize;
                 str_len = get_cstr_len(str_addr as _);
-                if hash == dbj2_hash(slice::from_raw_parts(str_addr as _, str_len)){
-                    return (dos_header as u64 + addr_list[ord_list[iter] as usize] as u64) as PVOID;
+                if hash == dbj2_hash(slice::from_raw_parts(str_addr as _, str_len)) {
+                    return (dos_header as usize + addr_list[ord_list[iter] as usize] as usize)
+                        as *const ();
                 }
             }
         }
     }
-	NULL
+    null()
 }
 
 #[cfg(target_arch = "x86_64")]
-#[cfg(all(feature = "_DIRECT_", not(feature = "_INDIRECT_")))]
+#[cfg(all(feature = "direct", not(feature = "indirect")))]
 pub fn get_ssn(hash: u32) -> u16 {
-    let ntdll_addr : PVOID;
-    let funct_addr : PVOID;
-    let ssn        : u16;
-
-    ntdll_addr = get_module_addr(crate::obf!("ntdll.dll"));
-    funct_addr = get_function_addr(ntdll_addr, hash);
-    unsafe {
-        ssn = *((funct_addr as u64 + 4) as *const u16);
-    }
-    ssn
+    let ntdll_addr = get_module_addr(crate::obf!("ntdll.dll"));
+    let funct_addr = get_function_addr(ntdll_addr, hash);
+    unsafe { *((funct_addr as u64 + 4) as *const u16) }
 }
 
 #[cfg(target_arch = "x86_64")]
-#[cfg(all(feature = "_INDIRECT_", not(feature = "_DIRECT_")))]
+#[cfg(all(feature = "indirect", not(feature = "direct")))]
 pub fn get_ssn(hash: u32) -> (u16, u64) {
-    let ntdll_addr : PVOID;
-    let funct_addr : PVOID;
-    let ssn_addr   : u64;
-    let ssn        : u16;
-
-    ntdll_addr = get_module_addr(crate::obf!("ntdll.dll"));
-    funct_addr = get_function_addr(ntdll_addr, hash);
-    unsafe {
-        ssn = *((funct_addr as u64 + 4) as *const u16);
-    }
-    ssn_addr = funct_addr as u64 + 0x12;
+    let ntdll_addr = get_module_addr(crate::obf!("ntdll.dll"));
+    let funct_addr = get_function_addr(ntdll_addr, hash);
+    let ssn = unsafe { *((funct_addr as u64 + 4) as *const u16) };
+    let ssn_addr = funct_addr as u64 + 0x12;
 
     (ssn, ssn_addr)
 }
 
-
-
 #[cfg(target_arch = "x86")]
-#[cfg(all(feature = "_DIRECT_", not(feature = "_INDIRECT_")))]
+#[cfg(all(feature = "direct", not(feature = "indirect")))]
 pub fn get_ssn(hash: u32) -> u16 {
-    let ntdll_addr : PVOID;
-    let funct_addr : PVOID;
-    let ssn        : u16;
-
-    ntdll_addr = get_module_addr(crate::obf!("ntdll.dll"));
-    funct_addr = get_function_addr(ntdll_addr, hash);
-    unsafe {
-        ssn = *((funct_addr as u64 + 1) as *const u16);
-    }
-    ssn
+    let ntdll_addr = get_module_addr(crate::obf!("ntdll.dll"));
+    let funct_addr = get_function_addr(ntdll_addr, hash);
+    unsafe { *((funct_addr as u64 + 1) as *const u16) }
 }
 
 #[cfg(target_arch = "x86")]
-#[cfg(all(feature = "_INDIRECT_", not(feature = "_DIRECT_")))]
+#[cfg(all(feature = "indirect", not(feature = "direct")))]
 pub fn get_ssn(hash: u32) -> (u16, u32) {
-    let ntdll_addr : PVOID;
-    let funct_addr : PVOID;
-    let ssn_addr   : u32;
-    let ssn        : u16;
+    let ssn_addr: u32;
+    let ssn: u16;
 
-    ntdll_addr = get_module_addr(crate::obf!("ntdll.dll"));
-    funct_addr = get_function_addr(ntdll_addr, hash);
+    let ntdll_addr = get_module_addr(crate::obf!("ntdll.dll"));
+    let funct_addr = get_function_addr(ntdll_addr, hash);
     unsafe {
         ssn = *((funct_addr as u64 + 1) as *const u16);
-    
-        if is_wow64(){
+
+        if is_wow64() {
             ssn_addr = funct_addr as u32 + 0x0A;
-        } 
-        else {
+        } else {
             ssn_addr = funct_addr as u32 + 0x0F;
         }
     }
     (ssn, ssn_addr)
 }
-
